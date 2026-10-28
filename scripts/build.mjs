@@ -43,6 +43,12 @@ await build({
 });
 console.log('bundled Supabase client');
 
+// Local dev: pick up variables from .env.local / .env. Vercel sets them directly, and
+// values already in the environment win over the files.
+for (const file of ['.env.local', '.env']) {
+  if (existsSync(path.join(root, file))) process.loadEnvFile(path.join(root, file));
+}
+
 const env = process.env;
 const config = {
   supabaseUrl: env.SUPABASE_URL || env.NEXT_PUBLIC_SUPABASE_URL || '',

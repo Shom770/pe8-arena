@@ -43,6 +43,8 @@ npm install
 npm run dev        # http://localhost:5173 (add ?local to test with several tabs)
 ```
 
+To use real Supabase rooms locally, copy `.env.example` to `.env` and fill in `SUPABASE_URL` and `SUPABASE_ANON_KEY`. The build reads `.env.local` and `.env`, and variables already set in your shell take priority.
+
 ## Practice the problems offline
 
 `problems/` holds each question as its own folder. Each folder has the starter file, `PROBLEM.md`, the same extra tests, and small stand-ins for the course modules (`Assert`, `Helices`, the queue and set interfaces). With OCaml installed:

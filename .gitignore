@@ -5,3 +5,5 @@ public/problems.json
 problems/*/_build/
 __pycache__/
 public/vendor/
+.env
+.env.local
