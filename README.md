@@ -26,15 +26,15 @@ The problem statements and starter code come from your course's practice exam. C
 
 ## How a race works
 
-1. Everyone joins the room. Two people click **Play** to take the player slots; everyone else spectates.
-2. The host picks a problem (or Random) and starts. After a 3-second countdown, both editors unlock with the starter file.
+1. Everyone takes a weigh-in photo (webcam or upload) and joins the room. Photos are sent over the room channel and are never stored on a server. Two people take the red and blue corners, or the host hits **Random matchup** to pick two people from the room. Everyone else watches from ringside.
+2. The host rings the bell. By default the problem climbs a difficulty ladder (`public/js/zones.js`): round 1 is a random Zone 1 warm-up, round 2 comes from Zone 2, and so on up to Zone 4, without repeating a problem. The host can also pick a specific zone or problem. After a 3-second countdown, both editors unlock with the starter file.
 3. Players edit the whole file, just like on PrairieLearn, and press **Run tests** (Ctrl/⌘ + Enter) as often as they like.
 4. Each run is checked against:
    - the tests already in the file
    - extra hidden tests built from the examples in the problem statement
    - for the "must be tail recursive" problems, a large-input test
 5. Spectators see both editors live, plus each player's pass count, test list, and compile errors. Players see only their opponent's progress until the race ends.
-6. The first submission that passes everything wins.
+6. The first submission that passes everything wins, and everyone sees the loser's photo get knocked out.
 
 ## Run it on your computer
 

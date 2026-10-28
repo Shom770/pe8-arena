@@ -11,6 +11,12 @@
 // report a pass their code did not earn. Submissions are graded in the order
 // the host receives them; the first one that passes every test wins.
 //
+// In free-for-all mode ('brawl') everyone in the room at the bell races. Code
+// is not streamed; the host keeps a scoreboard of each player's best result and
+// sends each player their own detailed result on a 'result' event. The round
+// ends once the podium is decided: when the top three have finished (fewer in
+// a smaller field), or when the host ends it.
+//
 // Each member's weigh-in photo travels on its own 'photo' event rather than in
 // presence, and is re-sent whenever someone new says hello.
 
@@ -38,7 +44,25 @@ function freshState() {
     matchup: 0, // bumped by each random matchup, so every page can play the reveal
     round: 0, // races started in this room
     played: [], // problem ids raced so far, so random picks don't repeat
+    mode: 'duel', // duel | brawl
+    field: [], // brawl: [{id, name}] of everyone racing
+    board: {}, // brawl: id -> {passed, total, compiled, finishMs, bestAt, grading, left}
+    standings: null, // brawl: final ranking, set when the round ends
   };
+}
+
+// Finishers by time, then everyone else by tests passed (earliest to reach it
+// first), with players who left last.
+export function brawlStandings(s) {
+  const far = 1e15;
+  return (s.field || [])
+    .map((f) => ({ id: f.id, name: f.name, ...s.board[f.id] }))
+    .sort((a, b) =>
+      (a.finishMs ?? far) - (b.finishMs ?? far) ||
+      (a.left ? 1 : 0) - (b.left ? 1 : 0) ||
+      b.passed - a.passed ||
+      (a.bestAt ?? far) - (b.bestAt ?? far)
+    );
 }
 
 function trimResult(r) {
@@ -72,6 +96,8 @@ export class Room {
     this._pendingCode = null;
     this.photos = {};
     if (photo) this.photos[me.id] = photo;
+    this.myCode = '';
+    this.myResult = null;
   }
 
   // ---- events for the page ----
@@ -91,7 +117,11 @@ export class Room {
     return this.hostId === this.me.id;
   }
   get mySlot() {
+    if (this.state.mode === 'brawl') return -1;
     return this.state.slots.indexOf(this.me.id);
+  }
+  get inField() {
+    return this.state.mode === 'brawl' && (this.state.field || []).some((f) => f.id === this.me.id);
   }
   get problem() {
     return this.problems.find((p) => p.id === this.state.problemId) || null;
@@ -113,6 +143,7 @@ export class Room {
     this.t.on('code', (p) => this._onCode(p));
     this.t.on('submit', (p) => this.isHost && this._hostSubmit(p));
     this.t.on('photo', (p) => this._onPhoto(p));
+    this.t.on('result', (p) => this._onResult(p));
     this.t.onPresence((members) => this._onPresence(members));
     await this.t.connect();
     this.t.send('hello', { id: this.me.id });
@@ -137,7 +168,7 @@ export class Room {
           if (id && !byId.has(id)) {
             s.slots[i] = null;
             s.names[i] = null;
-            if ((s.phase === 'racing' || s.phase === 'countdown') && !s.winner) {
+            if ((s.phase === 'racing' || s.phase === 'countdown') && !s.winner && s.mode !== 'brawl') {
               const other = 1 - i;
               if (s.slots[other]) {
                 s.phase = 'finished';
@@ -148,6 +179,10 @@ export class Room {
             }
           }
         });
+        if (s.mode === 'brawl' && (s.phase === 'racing' || s.phase === 'countdown')) {
+          for (const f of s.field) if (!byId.has(f.id) && !s.board[f.id].left) s.board[f.id].left = true;
+          this._maybeEndBrawl(s);
+        }
       }, !wasHost);
     }
     this._emit('change');
@@ -193,9 +228,18 @@ export class Room {
     this._emit('change');
   }
 
+  _onResult(p) {
+    if (!p || p.id !== this.me.id || p.raceId !== this.state.raceId) return;
+    if (this.myResult && this.myResult.n > p.result.n) return;
+    this.myResult = p.result;
+    this._emit('change');
+  }
+
   _resetRace(countdownMs) {
     const starter = this.problem ? this.problem.starter : '';
     this.codes = [starter, starter];
+    this.myCode = starter;
+    this.myResult = null;
     this.codeSeenAt = [0, 0];
     this.submitCount = 0;
     this.localStart = Date.now() + countdownMs;
@@ -239,11 +283,31 @@ export class Room {
     });
   }
 
+  hostSetMode(mode) {
+    if (mode !== 'duel' && mode !== 'brawl') return;
+    if (this.state.phase === 'countdown' || this.state.phase === 'racing') return;
+    this._commit((s) => {
+      s.mode = mode;
+      s.phase = 'lobby';
+      s.winner = null;
+      s.standings = null;
+    });
+  }
+
   hostStart(problemId) {
-    if (!this.isHost || !this.state.slots[0] || !this.state.slots[1]) return;
+    if (!this.isHost) return;
+    const brawl = this.state.mode === 'brawl';
+    if (brawl ? this.members.length < 2 : !this.state.slots[0] || !this.state.slots[1]) return;
     if (this.state.phase === 'countdown' || this.state.phase === 'racing') return;
     const raceId = rand();
     this._commit((s) => {
+      if (brawl) {
+        s.field = [...this.members].sort((a, b) => a.joinedAt - b.joinedAt).map((m) => ({ id: m.id, name: m.name }));
+        s.board = Object.fromEntries(
+          s.field.map((f) => [f.id, { passed: 0, total: 0, compiled: true, finishMs: null, bestAt: null, grading: null, left: false }])
+        );
+        s.standings = null;
+      }
       s.phase = 'countdown';
       s.problemId = problemId;
       s.round = (s.round || 0) + 1;
@@ -276,6 +340,7 @@ export class Room {
     }
     this._commit((s) => {
       s.phase = 'lobby';
+      s.mode = 'duel';
       s.winner = null;
       s.slots = [pool[0].id, pool[1].id];
       s.names = [pool[0].name, pool[1].name];
@@ -290,6 +355,57 @@ export class Room {
     });
   }
 
+  hostEndRound() {
+    if (this.state.mode !== 'brawl' || this.state.phase !== 'racing') return;
+    this._commit((s) => this._finishBrawl(s));
+  }
+
+  _finishBrawl(s) {
+    s.phase = 'finished';
+    s.winner = null;
+    s.standings = brawlStandings(s);
+  }
+
+  // Ends the round once the podium is decided: the top three (or everyone but
+  // one, in a field of three or fewer) have finished, or nobody is left racing.
+  _maybeEndBrawl(s) {
+    if (s.mode !== 'brawl' || (s.phase !== 'racing' && s.phase !== 'countdown')) return;
+    const active = s.field.filter((f) => !s.board[f.id].left);
+    const done = active.filter((f) => s.board[f.id].finishMs != null).length;
+    if (active.length <= 1 || done >= Math.min(3, active.length - 1)) this._finishBrawl(s);
+  }
+
+  async _hostBrawlSubmit(p) {
+    const s = this.state;
+    const entry = s.board[p.id];
+    if (p.raceId !== s.raceId || s.phase !== 'racing' || !entry || entry.left || entry.finishMs != null) return;
+    const problem = this.problem;
+    if (!problem) return;
+    const raceId = s.raceId;
+    this._commit((st) => {
+      st.board[p.id].grading = p.n;
+    });
+    const result = await this.grader.grade(problem, p.code);
+    if (this.state.raceId !== raceId) return;
+    const detail = trimResult({ ...result, n: p.n });
+    this.t.send('result', { raceId, id: p.id, result: detail });
+    this._onResult({ raceId, id: p.id, result: detail });
+    this._commit((st) => {
+      const b = st.board[p.id];
+      if (b.grading === p.n) b.grading = null;
+      if (st.phase !== 'racing' || b.finishMs != null) return;
+      const elapsed = Date.now() - st.startedAt;
+      b.compiled = result.compiled;
+      if (result.compiled && result.total) b.total = result.total;
+      if (result.passed > b.passed) {
+        b.passed = result.passed;
+        b.bestAt = elapsed;
+      }
+      if (result.allPassed) b.finishMs = elapsed;
+      this._maybeEndBrawl(st);
+    });
+  }
+
   hostClearSlot(slot) {
     if (this.state.phase === 'racing' || this.state.phase === 'countdown') return;
     this._commit((s) => {
@@ -300,6 +416,7 @@ export class Room {
 
   async _hostSubmit(p) {
     const s = this.state;
+    if (s.mode === 'brawl') return this._hostBrawlSubmit(p);
     if (p.raceId !== s.raceId || s.slots[p.slot] !== p.id || s.phase !== 'racing') return;
     const problem = this.problem;
     if (!problem) return;
@@ -331,6 +448,11 @@ export class Room {
   }
 
   setMyCode(code) {
+    if (this.state.mode === 'brawl') {
+      // Nobody else sees your code in a free-for-all, so it stays here until you run it.
+      this.myCode = code;
+      return;
+    }
     const slot = this.mySlot;
     if (slot < 0) return;
     this.codes[slot] = code;
@@ -345,6 +467,13 @@ export class Room {
   }
 
   submit() {
+    if (this.state.mode === 'brawl') {
+      if (!this.inField || this.state.phase !== 'racing') return false;
+      const payload = { raceId: this.state.raceId, id: this.me.id, code: this.myCode, n: ++this.submitCount };
+      if (this.isHost) this._hostSubmit(payload);
+      else this.t.send('submit', payload);
+      return true;
+    }
     const slot = this.mySlot;
     if (slot < 0 || this.state.phase !== 'racing') return false;
     const payload = { raceId: this.state.raceId, slot, id: this.me.id, code: this.codes[slot], n: ++this.submitCount };

@@ -47,12 +47,13 @@
     <section class="weigh-in">
       <div class="booth" id="booth">
         <div class="booth-frame">
-          <video playsinline muted></video>
+          <video autoplay playsinline muted></video>
           <img class="booth-photo" alt="Your weigh-in photo">
           <div class="booth-empty">
             <span class="booth-glyph">?</span>
             <span>No photo yet</span>
           </div>
+          <div class="booth-count" aria-live="polite"></div>
           <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
         </div>
         <div class="booth-actions">
@@ -83,7 +84,12 @@
   <!-- Room -->
   <main id="room" class="room hidden">
     <section id="lobby" class="lobby">
-      <p class="kicker center">Tonight's main event</p>
+      <p id="lobby-kicker" class="kicker center">Tonight's main event</p>
+      <div id="field" class="field hidden">
+        <div class="field-title">Free-for-all</div>
+        <p class="muted">Everyone in the room fights the same problem. You only see your own code. The first three to pass every test make the podium.</p>
+        <ul id="field-list"></ul>
+      </div>
       <div class="slots">
         <div class="slot" data-slot="0">
           <div class="slot-tag">Red corner</div>
@@ -102,6 +108,10 @@
       <div id="host-controls" class="card host-controls hidden">
         <div class="host-head">
           <span class="label">You're the promoter</span>
+          <div class="mode-toggle" role="group" aria-label="Mode">
+            <button class="seg" data-mode="duel">1v1 duel</button>
+            <button class="seg" data-mode="brawl">Free-for-all</button>
+          </div>
           <button id="random-match" class="btn gold">Random matchup</button>
         </div>
         <label for="problem-select">Problem</label>
@@ -150,6 +160,20 @@
         <div class="lane" data-lane="0"></div>
         <div class="lane" data-lane="1"></div>
       </div>
+      <div class="brawl-grid">
+        <div class="lane solo" id="solo-lane"></div>
+        <div id="brawl-watch" class="card brawl-watch hidden">
+          <strong>You're ringside for this one</strong>
+          <span class="muted">You arrived after the bell. Watch the standings; you'll be in the next round.</span>
+        </div>
+        <aside class="standings">
+          <div class="standings-head">
+            <span class="label">Live standings</span>
+            <button id="end-round" class="btn ghost small hidden">End round</button>
+          </div>
+          <ol id="standings"></ol>
+        </aside>
+      </div>
     </section>
   </main>
 
@@ -178,6 +202,26 @@
       <div class="ko-title">K.O.</div>
       <div class="ko-sub"></div>
       <div class="ko-dismiss muted small-text">Click anywhere to continue</div>
+    </div>
+  </div>
+
+  <div id="podium" class="podium hidden" role="dialog" aria-label="Podium">
+    <div class="ko-lights" aria-hidden="true"></div>
+    <div class="podium-confetti" aria-hidden="true"></div>
+    <div class="podium-head">
+      <div id="podium-kicker" class="kicker"></div>
+      <h2>Final standings</h2>
+      <p id="podium-you" class="podium-you"></p>
+    </div>
+    <div class="podium-stage">
+      <div class="pstep" data-place="2"><div class="pfighter"><img alt=""><div class="pname"></div><div class="pline"></div></div><div class="pblock">2</div></div>
+      <div class="pstep" data-place="1"><div class="pfighter"><div class="crown">♛</div><img alt=""><div class="pname"></div><div class="pline"></div></div><div class="pblock">1</div></div>
+      <div class="pstep" data-place="3"><div class="pfighter"><img alt=""><div class="pname"></div><div class="pline"></div></div><div class="pblock">3</div></div>
+    </div>
+    <ol id="podium-rest" class="podium-rest" start="4"></ol>
+    <div class="podium-actions">
+      <button id="podium-close" class="btn ghost">Close</button>
+      <button id="podium-lobby" class="btn primary hidden">Back to lobby</button>
     </div>
   </div>
 

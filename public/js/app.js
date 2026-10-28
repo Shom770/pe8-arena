@@ -1,4 +1,4 @@
-import { Room } from './room.js';
+import { Room, brawlStandings } from './room.js';
 import { Grader } from './grader.js';
 import { SupabaseTransport, LocalTransport } from './transport.js';
 import { Booth } from './camera.js';
@@ -15,12 +15,14 @@ let problems = [];
 let room = null;
 let booth = null;
 let lanes = [];
+let solo = null; // the free-for-all editor
 let lastRaceId = null;
 let lastMatchup = null;
 let spinning = false;
 let selectKey = null;
 let sawRacing = null; // raceId we watched while it was live, so a late joiner doesn't get a KO replay
 let koShown = null;
+let podiumShown = null;
 let bellRung = null;
 
 // ---------- helpers ----------
@@ -144,6 +146,10 @@ async function enter(code) {
   buildLanes();
   $('#start').onclick = startRace;
   $('#random-match').onclick = () => room.hostRandomMatch();
+  document.querySelectorAll('[data-mode]').forEach((b) => (b.onclick = () => room.hostSetMode(b.dataset.mode)));
+  $('#end-round').onclick = () => room.hostEndRound();
+  $('#podium-close').onclick = () => show($('#podium'), false);
+  $('#podium-lobby').onclick = () => room.hostBackToLobby();
   room.on('change', render);
   room.on('race', onNewRace);
   room.on('code', onRemoteCode);
@@ -179,6 +185,27 @@ function buildLanes() {
     $('.run', el).onclick = runTests;
     return { el, cm };
   });
+
+  const el = $('#solo-lane');
+  el.appendChild(tpl.content.cloneNode(true));
+  const cm = CodeMirror($('.editor', el), {
+    mode: 'text/x-ocaml',
+    lineNumbers: true,
+    matchBrackets: true,
+    indentUnit: 2,
+    tabSize: 2,
+    readOnly: 'nocursor',
+    extraKeys: {
+      Tab: (c) => c.replaceSelection('  '),
+      'Ctrl-Enter': () => runTests(),
+      'Cmd-Enter': () => runTests(),
+    },
+  });
+  cm.on('change', (c, change) => {
+    if (change.origin !== 'setValue' && room && room.inField) room.setMyCode(c.getValue());
+  });
+  $('.run', el).onclick = runTests;
+  solo = { el, cm };
 }
 
 // The host's problem picker: "next up" climbs the zone ladder, or pick a zone or a problem.
@@ -228,6 +255,8 @@ function onNewRace() {
     cm.setValue(room.codes[i]);
     cm.clearHistory();
   });
+  solo.cm.setValue(room.myCode);
+  solo.cm.clearHistory();
 }
 
 function onRemoteCode(slot) {
@@ -241,7 +270,7 @@ function onRemoteCode(slot) {
 }
 
 function runTests() {
-  if (!room || room.mySlot < 0) return;
+  if (!room || (room.mySlot < 0 && !room.inField)) return;
   if (room.state.phase !== 'racing' || Date.now() < room.localStart) return;
   room.submit();
   render();
@@ -261,10 +290,16 @@ function render() {
   show($('#lobby'), !inRace || s.phase === 'lobby');
   show($('#race'), inRace && s.phase !== 'lobby');
   show($('#clock'), s.phase === 'racing' || s.phase === 'finished');
+  $('#race').classList.toggle('brawl-mode', s.mode === 'brawl');
+  if (s.phase !== 'finished') show($('#podium'), false);
 
   renderLobby(s, mySlot);
-  if (inRace && s.phase !== 'lobby') renderRace(s, mySlot);
+  if (inRace && s.phase !== 'lobby') {
+    if (s.mode === 'brawl') renderBrawl(s);
+    else renderRace(s, mySlot);
+  }
   maybeKnockout(s);
+  maybePodium(s);
 }
 
 function renderLobby(s, mySlot) {
@@ -300,27 +335,43 @@ function renderLobby(s, mySlot) {
   $('#room').querySelectorAll('[data-release]').forEach((b) => (b.onclick = () => room.release()));
   $('#room').querySelectorAll('[data-kick]').forEach((b) => (b.onclick = () => room.hostClearSlot(Number(b.dataset.kick))));
 
+  const brawl = s.mode === 'brawl';
+  show($('.slots'), !brawl);
+  show($('#field'), brawl);
+  show($('#random-match'), !brawl);
+  $('#lobby-kicker').textContent = brawl ? 'Everyone in. Last one standing is nobody.' : "Tonight's main event";
+  document.querySelectorAll('[data-mode]').forEach((b) => b.classList.toggle('on', b.dataset.mode === (s.mode || 'duel')));
+  if (brawl) {
+    $('#field-list').innerHTML = [...room.members]
+      .sort((a, b) => a.joinedAt - b.joinedAt)
+      .map((m) => `<li><img src="${esc(pic(m.id, m.name))}" alt=""><span>${esc(m.name)}${m.id === room.me.id ? '<span class="you">you</span>' : ''}</span></li>`)
+      .join('');
+  }
+
   show($('#host-controls'), room.isHost);
   if (room.isHost) fillProblemSelect(s);
-  const ready = s.slots[0] && s.slots[1];
+  const ready = brawl ? room.members.length >= 2 : s.slots[0] && s.slots[1];
   $('#start').disabled = !ready || spinning;
   $('#random-match').disabled = room.members.length < 2 || spinning;
   const next = zoneForRound(s.round || 0);
+  const bout = `Round ${(s.round || 0) + 1} is a Zone ${next.n} bout (${next.blurb.toLowerCase()}). Bouts climb a zone each round.`;
   $('#start-hint').textContent = ready
-    ? `Round ${(s.round || 0) + 1} is a Zone ${next.n} bout (${next.blurb.toLowerCase()}). Bouts climb a zone each round.`
+    ? brawl ? `All ${room.members.length} of you fight. ${bout}` : bout
     : room.members.length < 2
       ? 'Waiting for someone to fight. Send the invite link.'
       : 'Need two fighters. Hit Random matchup, or let people take a corner.';
   $('#lobby-note').textContent = room.isHost
     ? ''
-    : `${room.nameOf(room.hostId) || 'The host'} is promoting tonight: they set the matchup and ring the bell.`;
+    : brawl
+      ? `Free-for-all: everyone here fights when ${room.nameOf(room.hostId) || 'the host'} rings the bell.`
+      : `${room.nameOf(room.hostId) || 'The host'} is promoting tonight: they set the matchup and ring the bell.`;
   show($('#lobby-note'), !room.isHost);
 
   $('#member-list').innerHTML = [...room.members]
     .sort((a, b) => a.joinedAt - b.joinedAt)
     .map((m) => {
-      const slot = s.slots.indexOf(m.id);
-      const role = slot >= 0 ? CORNERS[slot] : 'Ringside';
+      const slot = s.mode === 'brawl' ? -1 : s.slots.indexOf(m.id);
+      const role = s.mode === 'brawl' ? 'Fighter' : slot >= 0 ? CORNERS[slot] : 'Ringside';
       return `<li class="${slot >= 0 ? 'p' + slot : ''}"><img src="${esc(pic(m.id, m.name))}" alt="">${esc(m.name)}${m.id === room.hostId ? ' <span class="pill host">host</span>' : ''}${m.id === room.me.id ? '<span class="you">you</span>' : ''} <span class="muted">· ${role}</span></li>`;
     })
     .join('');
@@ -423,6 +474,134 @@ function renderRace(s, mySlot) {
   }
 }
 
+// ---------- free-for-all ----------
+function standingLine(e) {
+  if (e.finishMs != null) return fmtTime(e.finishMs);
+  if (e.left) return 'left';
+  return e.total ? `${e.passed}/${e.total} tests` : 'no tests passed';
+}
+
+function renderBrawl(s) {
+  const locked = s.phase !== 'racing' || Date.now() < room.localStart;
+  const z = room.problem ? zoneOf(room.problem.id) : ZONES[0];
+  $('#round-label').textContent = `Round ${s.round || 1} · Zone ${z.n} · Free-for-all · ${s.field.length} fighters`;
+
+  const live = s.standings || brawlStandings(s);
+  const myPlace = live.findIndex((e) => e.id === room.me.id) + 1;
+  const mine = s.board[room.me.id];
+  const inField = room.inField;
+  show(solo.el, inField);
+  show($('#brawl-watch'), !inField);
+
+  if (inField) {
+    const { el, cm } = solo;
+    const done = mine.finishMs != null;
+    const grading = mine.grading != null;
+    const r = room.myResult;
+    el.classList.toggle('done', done);
+    $('.lane-tag', el).textContent = `Free-for-all · you · #${myPlace} of ${live.length}`;
+    $('.lane-name', el).textContent = room.me.name;
+    $('.lane-photo', el).src = pic(room.me.id, room.me.name);
+    let status = '<span class="pill">coding</span>';
+    if (done) status = `<span class="pill win">finished #${myPlace} · ${fmtTime(mine.finishMs)}</span>`;
+    else if (grading) status = '<span class="pill busy">running tests…</span>';
+    else if (r && !r.compiled) status = '<span class="pill bad">compile error</span>';
+    else if (r) status = `<span class="pill">${r.passed}/${r.total} passing</span>`;
+    $('.lane-status', el).innerHTML = status;
+
+    const editable = !locked && !done;
+    if (cm.getOption('readOnly') !== (editable ? false : 'nocursor')) cm.setOption('readOnly', editable ? false : 'nocursor');
+    setTimeout(() => cm.refresh(), 0);
+    show($('.lane-actions', el), s.phase === 'racing' && !done);
+    const runBtn = $('.run', el);
+    runBtn.disabled = locked || grading;
+    runBtn.textContent = grading ? 'Running…' : 'Run tests';
+
+    const err = $('.lane-error', el);
+    err.textContent = r && r.error ? r.error : '';
+    show(err, !!(r && r.error));
+    $('.tests', el).innerHTML = r
+      ? r.tests.map((t) => `<li class="${t.ok ? 'ok' : 'no'}"><span>${t.ok ? '✓' : '✗'}</span> ${esc(t.name)}${t.detail ? ` <span class="muted">· ${esc(t.detail)}</span>` : ''}</li>`).join('')
+      : '';
+  }
+
+  show($('#end-round'), room.isHost && s.phase === 'racing');
+  $('#standings').innerHTML = live
+    .map((e, i) => {
+      const pct = e.finishMs != null ? 100 : e.total ? Math.round((100 * e.passed) / e.total) : 0;
+      const st = e.grading != null && e.finishMs == null ? 'running…' : standingLine(e);
+      const cls = [e.id === room.me.id && 'me', e.finishMs != null && 'done', e.left && 'left'].filter(Boolean).join(' ');
+      return `<li class="${cls}"><span class="place">${i + 1}</span><img src="${esc(pic(e.id, e.name))}" alt="">` +
+        `<div class="who"><div class="row"><span class="nm">${esc(e.name)}</span><span class="st">${esc(st)}</span></div><div class="bar"><i style="width:${pct}%"></i></div></div></li>`;
+    })
+    .join('');
+
+  const banner = $('#result-banner');
+  if (s.phase === 'finished' && s.standings) {
+    const first = s.standings[0];
+    banner.innerHTML =
+      `<div><div class="belt"><em>${esc(first ? first.name : 'Nobody')}</em> takes the belt${first && first.id === room.me.id ? ' · that’s you' : ''}</div>` +
+      `<div class="muted">${myPlace ? `You placed #${myPlace} of ${s.standings.length}` : `${s.standings.length} fighters`}</div></div>` +
+      '<div class="actions"><button id="show-podium" class="btn ghost small">Show podium</button>' +
+      (room.isHost ? '<button id="rematch" class="btn">Back to lobby</button>' : '<span class="muted">Waiting for the host…</span>') +
+      '</div>';
+    show(banner);
+    $('#show-podium').onclick = () => showPodium(s);
+    const b = $('#rematch');
+    if (b) b.onclick = () => room.hostBackToLobby();
+  } else {
+    show(banner, false);
+  }
+}
+
+function maybePodium(s) {
+  if (s.mode !== 'brawl' || s.phase !== 'finished' || !s.standings) return;
+  if (sawRacing !== s.raceId || podiumShown === s.raceId) return;
+  podiumShown = s.raceId;
+  showPodium(s);
+}
+
+function showPodium(s) {
+  const st = s.standings;
+  const pod = $('#podium');
+  const z = room.problem ? zoneOf(room.problem.id) : ZONES[0];
+  $('#podium-kicker').textContent = `Round ${s.round || 1} · Zone ${z.n} · Q${s.problemId}`;
+  const myPlace = st.findIndex((e) => e.id === room.me.id) + 1;
+  $('#podium-you').textContent =
+    myPlace === 1 ? 'You take the belt.' : myPlace > 0 && myPlace <= 3 ? `You made the podium: #${myPlace}.` : myPlace ? `You placed #${myPlace} of ${st.length}.` : '';
+
+  // Re-insert the podium so its rise animations play again on a replay.
+  const stage = $('.podium-stage', pod);
+  stage.replaceWith(stage.cloneNode(true));
+  [1, 2, 3].forEach((place) => {
+    const step = $(`.pstep[data-place="${place}"]`, pod);
+    const e = st[place - 1];
+    step.classList.toggle('empty', !e);
+    if (!e) return;
+    $('img', step).src = pic(e.id, e.name);
+    $('.pname', step).textContent = e.name;
+    $('.pline', step).textContent = standingLine(e);
+  });
+  $('#podium-rest').innerHTML = st
+    .slice(3)
+    .map((e) => `<li class="${e.id === room.me.id ? 'me' : ''}"><img src="${esc(pic(e.id, e.name))}" alt=""><span class="nm">${esc(e.name)}</span><span class="st">${esc(standingLine(e))}</span></li>`)
+    .join('');
+  show($('#podium-lobby'), room.isHost);
+
+  const confetti = $('.podium-confetti', pod);
+  const colors = ['#f2b531', '#e2322b', '#2f6fe0', '#f3ead7', '#4cc38a'];
+  confetti.innerHTML = Array.from({ length: 70 }, () => {
+    const left = Math.random() * 100;
+    const delay = 2.8 + Math.random() * 1.5;
+    const dur = 2.6 + Math.random() * 2.2;
+    const c = colors[Math.floor(Math.random() * colors.length)];
+    return `<i style="left:${left}%;background:${c};animation-delay:${delay}s;animation-duration:${dur}s"></i>`;
+  }).join('');
+
+  show(pod);
+  [700, 1700, 2800].forEach((ms, i) => setTimeout(() => !pod.classList.contains('hidden') && sfx.bell(i === 2 ? 3 : 1), ms));
+}
+
 // ---------- knockout ----------
 function maybeKnockout(s) {
   if (s.phase !== 'finished' || !s.winner || s.winner.forfeit) return;
@@ -460,7 +639,7 @@ function tick() {
   if (s.phase === 'countdown' || (s.phase === 'racing' && Date.now() < room.localStart + 700)) {
     const left = Math.max(0, room.localStart - Date.now());
     const z = room.problem ? zoneOf(room.problem.id) : ZONES[0];
-    $('.cd-round', cd).textContent = `Round ${s.round || 1} · Zone ${z.n}: ${z.name}`;
+    $('.cd-round', cd).textContent = `Round ${s.round || 1} · Zone ${z.n}: ${z.name}${s.mode === 'brawl' ? ' · Free-for-all' : ''}`;
     const num = $('.cd-num', cd);
     const text = left > 0 ? String(Math.ceil(left / 1000)) : 'Fight!';
     if (num.textContent !== text) {
@@ -482,7 +661,7 @@ function tick() {
     $('#clock').textContent = fmtTime(s.winner.elapsedMs);
   }
   // Refresh "typing…" indicators.
-  if (s.phase === 'racing') {
+  if (s.phase === 'racing' && s.mode !== 'brawl') {
     [0, 1].forEach((i) => {
       if (i === room.mySlot || s.results[i] || s.grading[i] != null) return;
       const typing = Date.now() - room.codeSeenAt[i] < 1500;
