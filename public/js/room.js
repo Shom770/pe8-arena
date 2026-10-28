@@ -12,7 +12,9 @@
 // the host receives them; the first one that passes every test wins.
 //
 // In free-for-all mode ('brawl') everyone in the room at the bell races. Code
-// is not streamed; the host keeps a scoreboard of each player's best result and
+// is only streamed once someone is allowed to watch it: after the first player
+// finishes (finishers can watch the rest), and once more at the end so everyone
+// can review the final answers. The host keeps a scoreboard of each player's best result and
 // sends each player their own detailed result on a 'result' event. The round
 // ends once the podium is decided: when the top three have finished (fewer in
 // a smaller field), or when the host ends it.
@@ -22,6 +24,7 @@
 
 const COUNTDOWN_MS = 3000;
 const CODE_THROTTLE_MS = 200;
+const BRAWL_CODE_THROTTLE_MS = 1000; // a free-for-all can have many players streaming at once
 
 const rand = () => Math.random().toString(36).slice(2, 10);
 const PHOTO_RE = /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/;
@@ -98,6 +101,10 @@ export class Room {
     if (photo) this.photos[me.id] = photo;
     this.myCode = '';
     this.myResult = null;
+    this.fieldCodes = {}; // brawl: id -> latest code seen from that player
+    this.fieldSeenAt = {};
+    this._streaming = false;
+    this._sentFinal = null;
   }
 
   // ---- events for the page ----
@@ -122,6 +129,13 @@ export class Room {
   }
   get inField() {
     return this.state.mode === 'brawl' && (this.state.field || []).some((f) => f.id === this.me.id);
+  }
+  // Finished players can watch the rest of the field; everyone can review at the end.
+  get canWatch() {
+    const s = this.state;
+    if (s.mode !== 'brawl' || !s.raceId) return false;
+    if (s.phase === 'finished') return true;
+    return s.phase === 'racing' && s.board[this.me.id]?.finishMs != null;
   }
   get problem() {
     return this.problems.find((p) => p.id === this.state.problemId) || null;
@@ -196,12 +210,34 @@ export class Room {
     const newRace = s.raceId && s.raceId !== this.state.raceId;
     this.state = s;
     if (newRace) this._resetRace(s.phase === 'countdown' ? s.countdownMs : 0);
+    this._afterState();
     this._emit('change');
+  }
+
+  // Brawl code sharing: start streaming when the first player finishes, and
+  // send the final answer once when the round ends.
+  _afterState() {
+    const s = this.state;
+    if (s.mode !== 'brawl' || !this.inField) return;
+    const streaming = s.phase === 'racing' && Object.values(s.board).some((b) => b.finishMs != null);
+    if (streaming && !this._streaming) this._sendFieldCode();
+    this._streaming = streaming;
+    if (s.phase === 'finished' && this._sentFinal !== s.raceId) {
+      this._sentFinal = s.raceId;
+      this._sendFieldCode();
+    }
+  }
+
+  _sendFieldCode() {
+    if (!this.state.raceId || !this.inField) return;
+    this.fieldCodes[this.me.id] = this.myCode;
+    this.t.send('code', { raceId: this.state.raceId, id: this.me.id, code: this.myCode });
   }
 
   _onHello() {
     if (this.isHost) this.t.send('state', this.state);
     this._sendPhoto();
+    if (this._streaming || this.state.phase === 'finished') this._sendFieldCode();
     const slot = this.mySlot;
     if (slot >= 0 && this.state.raceId) {
       this.t.send('code', { raceId: this.state.raceId, slot, code: this.codes[slot] });
@@ -209,6 +245,13 @@ export class Room {
   }
 
   _onCode(p) {
+    if (this.state.mode === 'brawl') {
+      if (p.raceId !== this.state.raceId || typeof p.id !== 'string' || typeof p.code !== 'string' || p.id === this.me.id) return;
+      this.fieldCodes[p.id] = p.code;
+      this.fieldSeenAt[p.id] = Date.now();
+      this._emit('fieldcode', p.id);
+      return;
+    }
     if (p.raceId !== this.state.raceId || p.slot === this.mySlot) return;
     this.codes[p.slot] = p.code;
     this.codeSeenAt[p.slot] = Date.now();
@@ -240,6 +283,9 @@ export class Room {
     this.codes = [starter, starter];
     this.myCode = starter;
     this.myResult = null;
+    this.fieldCodes = {};
+    this.fieldSeenAt = {};
+    this._streaming = false;
     this.codeSeenAt = [0, 0];
     this.submitCount = 0;
     this.localStart = Date.now() + countdownMs;
@@ -255,6 +301,7 @@ export class Room {
     this.state.seq += 1;
     this.state.hostId = this.me.id;
     this.t.send('state', this.state);
+    this._afterState();
     this._emit('change');
   }
 
@@ -449,8 +496,14 @@ export class Room {
 
   setMyCode(code) {
     if (this.state.mode === 'brawl') {
-      // Nobody else sees your code in a free-for-all, so it stays here until you run it.
+      // Only sent while someone who has finished may be watching.
       this.myCode = code;
+      if (!this._streaming || this.state.board[this.me.id]?.finishMs != null) return;
+      if (this._sendTimer) return;
+      this._sendTimer = setTimeout(() => {
+        this._sendTimer = null;
+        if (this._streaming) this._sendFieldCode();
+      }, BRAWL_CODE_THROTTLE_MS);
       return;
     }
     const slot = this.mySlot;

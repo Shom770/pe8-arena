@@ -355,6 +355,17 @@ label, .label { display: block; font: 700 13px var(--sans); text-transform: uppe
 #standings .bar i { display: block; height: 100%; background: var(--blue); transition: width .5s cubic-bezier(.2, .9, .3, 1); }
 #standings li.done .bar i { background: var(--gold); }
 
+.lane.watch { --c: var(--blue); }
+.lane.watch .CodeMirror { height: 560px; }
+.lane.watch.final { --c: var(--gold); }
+.watch-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.live-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--bad); margin-right: 6px; vertical-align: 1px; animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .25; } }
+.standings-hint { margin: -2px 0 10px; font-size: 15px; color: var(--gold); }
+#standings.watchable li { cursor: pointer; }
+#standings.watchable li:hover { background: rgba(255, 255, 255, .05); }
+#standings li.watching { outline: 2px solid var(--blue); background: rgba(47, 111, 224, .1); }
+
 /* ---------- podium ---------- */
 .podium { position: fixed; inset: 0; z-index: 40; overflow: auto; display: grid; justify-items: center; align-content: start; gap: 22px; padding: 48px 20px 40px;
   background: radial-gradient(ellipse 60% 50% at 50% 35%, rgba(242, 181, 49, .2), transparent 70%), rgba(8, 6, 5, .95); animation: ko-in .35s ease-out; }
@@ -362,7 +373,7 @@ label, .label { display: block; font: 700 13px var(--sans); text-transform: uppe
 .podium-head .kicker { margin-bottom: 4px; }
 .podium-head h2 { font: clamp(48px, 8vw, 92px)/.9 var(--display); text-transform: uppercase; margin: 0; text-shadow: 6px 6px 0 var(--red); }
 .podium-you { font-size: 21px; margin: 12px 0 0; color: var(--gold); min-height: 1em; }
-.podium-stage { position: relative; display: grid; grid-template-columns: repeat(3, minmax(0, 220px)); align-items: end; gap: 10px; width: 100%; justify-content: center; }
+.podium-stage { margin-top: 34px; position: relative; display: grid; grid-template-columns: repeat(3, minmax(0, 220px)); align-items: end; gap: 10px; width: 100%; justify-content: center; }
 .pstep { display: grid; justify-items: center; align-content: end; }
 .pstep.empty { visibility: hidden; }
 .pfighter { display: grid; justify-items: center; gap: 6px; padding-bottom: 12px; opacity: 0; animation: drop .6s cubic-bezier(.2, 1.4, .4, 1) forwards; position: relative; }
@@ -385,7 +396,8 @@ label, .label { display: block; font: 700 13px var(--sans); text-transform: uppe
 @keyframes rise { to { transform: scaleY(1); } }
 @keyframes drop { from { opacity: 0; transform: translateY(-60px) scale(.8); } to { opacity: 1; transform: none; } }
 @keyframes bob { 50% { transform: translateY(-6px) rotate(-6deg); } }
-.podium-rest { list-style: none; counter-reset: rest 3; margin: 0; padding: 0; width: min(560px, 100%); display: grid; gap: 6px; position: relative; opacity: 0; animation: ko-in .5s 3.4s forwards; }
+.podium-rest { list-style: none; counter-reset: rest 3; margin: 0; padding: 0; width: min(560px, 100%); display: grid; gap: 6px; position: relative; opacity: 0; animation: appear .5s 3.4s forwards; }
+@keyframes appear { to { opacity: 1; } }
 .podium-rest li { counter-increment: rest; display: grid; grid-template-columns: 34px 36px minmax(0, 1fr) auto; gap: 12px; align-items: center; background: var(--panel); border: 1px solid var(--line); padding: 6px 12px 6px 6px; }
 .podium-rest li::before { content: counter(rest); font: 22px var(--display); color: var(--muted); text-align: center; }
 .podium-rest li.me { border-color: var(--gold); }
@@ -431,7 +443,7 @@ label, .label { display: block; font: 700 13px var(--sans); text-transform: uppe
 @media (max-width: 900px) {
   .race.brawl-mode .brawl-grid { grid-template-columns: minmax(0, 1fr); }
   .standings { position: static; max-height: none; order: -1; }
-  .lane.solo .CodeMirror, .lane.solo .hidden-code { height: 440px; }
+  .lane.solo .CodeMirror, .lane.solo .hidden-code, .lane.watch .CodeMirror { height: 440px; }
   .host-head { justify-content: flex-start; }
   .mode-toggle { margin-right: 0; }
   .podium-stage { gap: 6px; }

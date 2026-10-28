@@ -16,6 +16,9 @@ let room = null;
 let booth = null;
 let lanes = [];
 let solo = null; // the free-for-all editor
+let watch = null; // read-only viewer for someone else's free-for-all code
+let watchId = null;
+let autoWatched = null;
 let lastRaceId = null;
 let lastMatchup = null;
 let spinning = false;
@@ -150,6 +153,18 @@ async function enter(code) {
   $('#end-round').onclick = () => room.hostEndRound();
   $('#podium-close').onclick = () => show($('#podium'), false);
   $('#podium-lobby').onclick = () => room.hostBackToLobby();
+  $('#podium-review').onclick = () => {
+    show($('#podium'), false);
+    const st = room.state.standings || [];
+    const first = st.find((e) => e.id !== room.me.id);
+    if (first) watchOne(first.id);
+  };
+  $('#watch-back').onclick = () => watchOne(null);
+  $('#standings').addEventListener('click', (e) => {
+    const li = e.target.closest('li[data-id]');
+    if (li && room.canWatch) watchOne(li.dataset.id === room.me.id ? null : li.dataset.id);
+  });
+  room.on('fieldcode', (id) => id === watchId && renderWatch(room.state));
   room.on('change', render);
   room.on('race', onNewRace);
   room.on('code', onRemoteCode);
@@ -206,6 +221,18 @@ function buildLanes() {
   });
   $('.run', el).onclick = runTests;
   solo = { el, cm };
+
+  const wel = $('#watch-lane');
+  watch = {
+    el: wel,
+    cm: CodeMirror($('.editor', wel), { mode: 'text/x-ocaml', lineNumbers: true, matchBrackets: true, readOnly: 'nocursor' }),
+  };
+}
+
+function watchOne(id) {
+  watchId = id;
+  render();
+  if (id) $('#watch-lane').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 // The host's problem picker: "next up" climbs the zone ladder, or pick a zone or a problem.
@@ -246,6 +273,7 @@ function onNewRace() {
   const p = room.problem;
   if (!p) return;
   lastRaceId = room.state.raceId;
+  watchId = null;
   const z = zoneOf(p.id);
   $('#problem-title').textContent = `Q${p.id}. ${p.title} · ${p.filename}`;
   $('.problem-panel summary .label').textContent = `Zone ${z.n} · ${z.name}`;
@@ -490,8 +518,23 @@ function renderBrawl(s) {
   const myPlace = live.findIndex((e) => e.id === room.me.id) + 1;
   const mine = s.board[room.me.id];
   const inField = room.inField;
-  show(solo.el, inField);
-  show($('#brawl-watch'), !inField);
+
+  // Finishing hands you a seat at the other screens: start on the best player still coding.
+  if (room.canWatch && s.phase === 'racing' && autoWatched !== s.raceId) {
+    autoWatched = s.raceId;
+    const next = live.find((e) => e.id !== room.me.id && e.finishMs == null && !e.left);
+    if (next) watchId = next.id;
+  }
+  if (!room.canWatch || !s.board[watchId]) watchId = null;
+  const viewing = !!watchId;
+  show(solo.el, inField && !viewing);
+  show(watch.el, viewing);
+  show($('#brawl-watch'), !inField && !viewing);
+  $('#brawl-watch strong').textContent = s.phase === 'finished' ? 'Review the answers' : "You're ringside for this one";
+  $('#brawl-watch .muted').textContent = s.phase === 'finished'
+    ? 'Click any fighter in the standings to see the code they ended with.'
+    : "You arrived after the bell. Watch the standings; you'll be in the next round.";
+  if (viewing) renderWatch(s);
 
   if (inField) {
     const { el, cm } = solo;
@@ -526,12 +569,16 @@ function renderBrawl(s) {
   }
 
   show($('#end-round'), room.isHost && s.phase === 'racing');
+  const hint = $('#standings-hint');
+  hint.textContent = s.phase === 'finished' ? 'Click a fighter to review their answer.' : 'You finished: click a fighter to watch them code.';
+  show(hint, room.canWatch);
+  $('#standings').classList.toggle('watchable', room.canWatch);
   $('#standings').innerHTML = live
     .map((e, i) => {
       const pct = e.finishMs != null ? 100 : e.total ? Math.round((100 * e.passed) / e.total) : 0;
       const st = e.grading != null && e.finishMs == null ? 'running…' : standingLine(e);
-      const cls = [e.id === room.me.id && 'me', e.finishMs != null && 'done', e.left && 'left'].filter(Boolean).join(' ');
-      return `<li class="${cls}"><span class="place">${i + 1}</span><img src="${esc(pic(e.id, e.name))}" alt="">` +
+      const cls = [e.id === room.me.id && 'me', e.finishMs != null && 'done', e.left && 'left', e.id === watchId && 'watching'].filter(Boolean).join(' ');
+      return `<li class="${cls}" data-id="${esc(e.id)}"><span class="place">${i + 1}</span><img src="${esc(pic(e.id, e.name))}" alt="">` +
         `<div class="who"><div class="row"><span class="nm">${esc(e.name)}</span><span class="st">${esc(st)}</span></div><div class="bar"><i style="width:${pct}%"></i></div></div></li>`;
     })
     .join('');
@@ -552,6 +599,37 @@ function renderBrawl(s) {
   } else {
     show(banner, false);
   }
+}
+
+// The read-only view of another player's code: live while racing, final at the end.
+function renderWatch(s) {
+  const e = s.board[watchId];
+  if (!e) return;
+  const { el, cm } = watch;
+  const live = s.phase === 'racing';
+  const standings = s.standings || brawlStandings(s);
+  const place = standings.findIndex((x) => x.id === watchId) + 1;
+  const name = (s.field.find((f) => f.id === watchId) || {}).name || 'Fighter';
+  el.classList.toggle('final', !live);
+  $('.lane-tag', el).textContent = live ? 'Watching live' : `Final answer · #${place}`;
+  $('.lane-name', el).textContent = name;
+  $('.lane-photo', el).src = pic(watchId, name);
+  $('.lane-status', el).innerHTML = e.finishMs != null
+    ? `<span class="pill win">finished · ${fmtTime(e.finishMs)}</span>`
+    : `<span class="pill">${live ? '<i class="live-dot"></i>' : ''}${e.total ? `${e.passed}/${e.total} tests` : 'no tests passed'}</span>`;
+
+  const code = room.fieldCodes[watchId];
+  const text = code ?? (live
+    ? "(* Waiting for this fighter's code. It shows up the next time they type. *)"
+    : "(* This fighter's final code didn't arrive (they may have left the room). *)");
+  if (cm.getValue() !== text) {
+    const scroll = cm.getScrollInfo();
+    cm.setValue(text);
+    cm.scrollTo(scroll.left, scroll.top);
+  }
+  setTimeout(() => cm.refresh(), 0);
+  $('#watch-back').textContent = room.inField ? 'Back to my code' : 'Close';
+  $('#watch-hint').textContent = live ? 'Updates about once a second while they type.' : '';
 }
 
 function maybePodium(s) {

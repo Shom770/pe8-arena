@@ -36,6 +36,8 @@ The problem statements and starter code come from your course's practice exam. C
 5. Spectators see both editors live, plus each player's pass count, test list, and compile errors. Players see only their opponent's progress until the race ends.
 6. The first submission that passes everything wins, and everyone sees the loser's photo get knocked out.
 
+**Free-for-all mode.** The host can switch the room from **1v1 duel** to **Free-for-all**. Then everyone in the room at the bell races the same problem. Each player sees only their own editor (code isn't streamed in this mode) plus live standings for the whole field. The round ends once the podium is decided (the top three have passed every test, or everyone but one in a field of three or fewer), or when the host ends it. Finishers rank by time and everyone else by tests passed, then an animated podium shows the top three. The host grades every submission in turn, so a large room makes grading queue up.
+
 ## Run it on your computer
 
 ```bash

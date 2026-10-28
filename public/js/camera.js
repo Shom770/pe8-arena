@@ -94,6 +94,8 @@ export class Booth {
     if (this.stream) this.stream.getTracks().forEach((t) => t.stop());
     this.stream = null;
     this.video.srcObject = null;
+    this.count.textContent = '';
+    this._render();
   }
 
   // A photo-booth 3-2-1, then the shot. Retries while the camera is still
@@ -124,8 +126,8 @@ export class Booth {
     this.root.classList.remove('flash');
     void this.root.offsetWidth;
     this.root.classList.add('flash');
-    this._set(canvas.toDataURL('image/jpeg', QUALITY));
     this.stop();
+    this._set(canvas.toDataURL('image/jpeg', QUALITY));
   }
 
   upload(file) {
@@ -133,9 +135,9 @@ export class Booth {
     const url = URL.createObjectURL(file);
     const img = new Image();
     img.onload = () => {
+      this.stop();
       this._set(toSquare(img, img.naturalWidth, img.naturalHeight, false).toDataURL('image/jpeg', QUALITY));
       URL.revokeObjectURL(url);
-      this.stop();
     };
     img.onerror = () => this._say("Couldn't read that image.");
     img.src = url;

@@ -162,6 +162,21 @@
       </div>
       <div class="brawl-grid">
         <div class="lane solo" id="solo-lane"></div>
+        <div class="lane watch hidden" id="watch-lane">
+          <div class="lane-head">
+            <img class="lane-photo" alt="">
+            <div class="lane-who">
+              <div class="lane-tag"></div>
+              <div class="lane-name"></div>
+            </div>
+            <div class="lane-status"></div>
+          </div>
+          <div class="editor"></div>
+          <div class="watch-actions">
+            <button id="watch-back" class="btn ghost small">Back to my code</button>
+            <span id="watch-hint" class="muted small-text"></span>
+          </div>
+        </div>
         <div id="brawl-watch" class="card brawl-watch hidden">
           <strong>You're ringside for this one</strong>
           <span class="muted">You arrived after the bell. Watch the standings; you'll be in the next round.</span>
@@ -171,6 +186,7 @@
             <span class="label">Live standings</span>
             <button id="end-round" class="btn ghost small hidden">End round</button>
           </div>
+          <p id="standings-hint" class="standings-hint hidden"></p>
           <ol id="standings"></ol>
         </aside>
       </div>
@@ -221,6 +237,7 @@
     <ol id="podium-rest" class="podium-rest" start="4"></ol>
     <div class="podium-actions">
       <button id="podium-close" class="btn ghost">Close</button>
+      <button id="podium-review" class="btn gold">Review answers</button>
       <button id="podium-lobby" class="btn primary hidden">Back to lobby</button>
     </div>
   </div>
