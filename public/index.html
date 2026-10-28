@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OCaml Arena</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23e8743b'/><text x='16' y='22' font-size='16' text-anchor='middle' fill='white' font-family='monospace'>1v1</text></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="vendor/codemirror/lib/codemirror.css">
+  <link rel="stylesheet" href="css/app.css">
+  <script src="config.js"></script>
+  <script src="vendor/codemirror/lib/codemirror.js"></script>
+  <script src="vendor/codemirror/mode/mllike/mllike.js"></script>
+  <script src="vendor/codemirror/addon/edit/matchbrackets.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="./"><span class="brand-mark">λ</span> OCaml Arena</a>
+    <div id="room-meta" class="room-meta hidden">
+      <span class="label">Room</span>
+      <code id="room-code"></code>
+      <button id="copy-link" class="btn ghost small">Copy invite link</button>
+      <span id="member-count" class="muted"></span>
+    </div>
+    <div id="clock" class="clock hidden">00:00.0</div>
+  </header>
+
+  <div id="mode-banner" class="banner hidden"></div>
+
+  <!-- Home -->
+  <main id="home" class="home">
+    <section class="hero">
+      <h1>Race your friends through<br>CIS 1200 practice problems.</h1>
+      <p class="muted">Two players code the same problem side by side. Everyone else watches both editors live. The first to pass every test wins.</p>
+    </section>
+    <section class="card join-card">
+      <label for="name">Your name</label>
+      <input id="name" maxlength="24" placeholder="Ada" autocomplete="nickname">
+      <div class="join-row">
+        <button id="create" class="btn primary">Create room</button>
+        <span class="muted">or</span>
+        <input id="join-code" maxlength="8" placeholder="Room code" autocomplete="off">
+        <button id="join" class="btn">Join</button>
+      </div>
+      <p id="home-error" class="error hidden"></p>
+    </section>
+  </main>
+
+  <!-- Room -->
+  <main id="room" class="room hidden">
+    <section id="lobby" class="lobby">
+      <div class="slots">
+        <div class="slot" data-slot="0">
+          <div class="slot-tag">Player 1</div>
+          <div class="slot-name"></div>
+          <div class="slot-actions"></div>
+        </div>
+        <div class="versus">vs</div>
+        <div class="slot" data-slot="1">
+          <div class="slot-tag">Player 2</div>
+          <div class="slot-name"></div>
+          <div class="slot-actions"></div>
+        </div>
+      </div>
+      <div id="host-controls" class="card host-controls hidden">
+        <label for="problem-select">Problem</label>
+        <div class="host-row">
+          <select id="problem-select"></select>
+          <button id="start" class="btn primary">Start race</button>
+        </div>
+        <p id="start-hint" class="muted small-text"></p>
+      </div>
+      <p id="lobby-note" class="muted center"></p>
+      <div class="spectators">
+        <span class="label">In the room</span>
+        <ul id="member-list"></ul>
+      </div>
+    </section>
+
+    <section id="race" class="race hidden">
+      <div id="countdown" class="countdown hidden"></div>
+      <div id="result-banner" class="result-banner hidden"></div>
+      <details id="problem-panel" class="problem-panel" open>
+        <summary><span id="problem-title"></span></summary>
+        <pre id="problem-text"></pre>
+      </details>
+      <div class="lanes">
+        <div class="lane" data-lane="0"></div>
+        <div class="lane" data-lane="1"></div>
+      </div>
+    </section>
+  </main>
+
+  <template id="lane-template">
+    <div class="lane-head">
+      <div>
+        <div class="lane-tag"></div>
+        <div class="lane-name"></div>
+      </div>
+      <div class="lane-status"></div>
+    </div>
+    <div class="progress"><div class="progress-fill"></div></div>
+    <div class="editor-wrap">
+      <div class="editor"></div>
+      <div class="hidden-code hidden">Your opponent's code is hidden while you race.<br><span class="muted">Spectators can see both editors.</span></div>
+    </div>
+    <div class="lane-actions hidden">
+      <button class="btn primary run">Run tests</button>
+      <span class="muted small-text">Ctrl/⌘ + Enter</span>
+    </div>
+    <pre class="lane-error hidden"></pre>
+    <ul class="tests"></ul>
+  </template>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

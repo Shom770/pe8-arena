@@ -1,0 +1,7 @@
+node_modules/
+public/ocaml/
+public/config.js
+public/problems.json
+problems/*/_build/
+__pycache__/
+public/vendor/

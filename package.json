@@ -1,0 +1,21 @@
+{
+  "name": "ocaml-arena",
+  "private": true,
+  "version": "1.0.0",
+  "description": "1v1 OCaml practice races with live spectating. Static site for Vercel; realtime via Supabase.",
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "dev": "node scripts/build.mjs && node scripts/serve.mjs",
+    "check": "node tools/check_program.mjs"
+  },
+  "dependencies": {
+    "@live-codes/ocaml": "0.2.0",
+    "@supabase/supabase-js": "2.118.0",
+    "codemirror": "5.65.21",
+    "esbuild": "0.25.12"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
