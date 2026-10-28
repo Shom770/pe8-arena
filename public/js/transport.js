@@ -8,7 +8,7 @@
 // Shape: await t.connect(); t.send(event, payload); t.on(event, fn(payload));
 //        t.onPresence(fn(members)); t.leave(). Members are {id, name, joinedAt}.
 
-export const EVENTS = ['state', 'hello', 'claim', 'release', 'code', 'submit', 'host_action'];
+export const EVENTS = ['state', 'hello', 'claim', 'release', 'code', 'submit', 'host_action', 'photo'];
 
 export class SupabaseTransport {
   constructor({ url, anonKey, room, me }) {

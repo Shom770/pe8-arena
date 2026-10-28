@@ -10,11 +10,16 @@
 // code to the host, which grades it in its own browser, so a player cannot
 // report a pass their code did not earn. Submissions are graded in the order
 // the host receives them; the first one that passes every test wins.
+//
+// Each member's weigh-in photo travels on its own 'photo' event rather than in
+// presence, and is re-sent whenever someone new says hello.
 
 const COUNTDOWN_MS = 3000;
 const CODE_THROTTLE_MS = 200;
 
 const rand = () => Math.random().toString(36).slice(2, 10);
+const PHOTO_RE = /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/;
+const MAX_PHOTO_CHARS = 80000;
 
 function freshState() {
   return {
@@ -30,6 +35,9 @@ function freshState() {
     results: [null, null],
     grading: [null, null],
     winner: null,
+    matchup: 0, // bumped by each random matchup, so every page can play the reveal
+    round: 0, // races started in this room
+    played: [], // problem ids raced so far, so random picks don't repeat
   };
 }
 
@@ -48,7 +56,7 @@ function trimResult(r) {
 }
 
 export class Room {
-  constructor({ transport, me, problems, grader }) {
+  constructor({ transport, me, problems, grader, photo = null }) {
     this.t = transport;
     this.me = me;
     this.problems = problems;
@@ -62,6 +70,8 @@ export class Room {
     this.listeners = {};
     this._sendTimer = null;
     this._pendingCode = null;
+    this.photos = {};
+    if (photo) this.photos[me.id] = photo;
   }
 
   // ---- events for the page ----
@@ -90,6 +100,9 @@ export class Room {
     const m = this.members.find((x) => x.id === id);
     return m ? m.name : null;
   }
+  photoOf(id) {
+    return this.photos[id] || null;
+  }
 
   // ---- lifecycle ----
   async join() {
@@ -99,9 +112,11 @@ export class Room {
     this.t.on('release', (p) => this.isHost && this._hostRelease(p.id));
     this.t.on('code', (p) => this._onCode(p));
     this.t.on('submit', (p) => this.isHost && this._hostSubmit(p));
+    this.t.on('photo', (p) => this._onPhoto(p));
     this.t.onPresence((members) => this._onPresence(members));
     await this.t.connect();
     this.t.send('hello', { id: this.me.id });
+    this._sendPhoto();
     this._emit('change');
   }
 
@@ -151,6 +166,7 @@ export class Room {
 
   _onHello() {
     if (this.isHost) this.t.send('state', this.state);
+    this._sendPhoto();
     const slot = this.mySlot;
     if (slot >= 0 && this.state.raceId) {
       this.t.send('code', { raceId: this.state.raceId, slot, code: this.codes[slot] });
@@ -162,6 +178,19 @@ export class Room {
     this.codes[p.slot] = p.code;
     this.codeSeenAt[p.slot] = Date.now();
     this._emit('code', p.slot);
+  }
+
+  _sendPhoto() {
+    const photo = this.photos[this.me.id];
+    if (photo) this.t.send('photo', { id: this.me.id, photo });
+  }
+
+  _onPhoto(p) {
+    if (!p || typeof p.id !== 'string' || typeof p.photo !== 'string') return;
+    if (p.photo.length > MAX_PHOTO_CHARS || !PHOTO_RE.test(p.photo)) return;
+    if (this.photos[p.id] === p.photo) return;
+    this.photos[p.id] = p.photo;
+    this._emit('change');
   }
 
   _resetRace(countdownMs) {
@@ -217,6 +246,8 @@ export class Room {
     this._commit((s) => {
       s.phase = 'countdown';
       s.problemId = problemId;
+      s.round = (s.round || 0) + 1;
+      s.played = [...(s.played || []), problemId].slice(-60);
       s.raceId = raceId;
       s.countdownMs = COUNTDOWN_MS;
       s.startedAt = null;
@@ -232,6 +263,24 @@ export class Room {
         s.startedAt = Date.now();
       });
     }, COUNTDOWN_MS);
+  }
+
+  // Puts two random members of the room in the player slots.
+  hostRandomMatch() {
+    if (!this.isHost || this.members.length < 2) return;
+    if (this.state.phase === 'countdown' || this.state.phase === 'racing') return;
+    const pool = [...this.members];
+    for (let i = pool.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [pool[i], pool[j]] = [pool[j], pool[i]];
+    }
+    this._commit((s) => {
+      s.phase = 'lobby';
+      s.winner = null;
+      s.slots = [pool[0].id, pool[1].id];
+      s.names = [pool[0].name, pool[1].name];
+      s.matchup = (s.matchup || 0) + 1;
+    });
   }
 
   hostBackToLobby() {

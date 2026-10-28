@@ -10,7 +10,7 @@
 // behind for the next, and an infinite loop is cut off by terminating it.
 // A spare worker is kept warm so a grade does not wait for start-up.
 
-import { buildProgram, parseResults } from './program.js';
+import { buildProgram, parseResults, toPlayerLines } from './program.js';
 
 export class Grader {
   constructor({ baseUrl = new URL('/ocaml/', location.href), timeoutMs = 15000, stressN } = {}) {
@@ -81,7 +81,7 @@ export class Grader {
       } catch (err) {
         return { error: String(err.message || err), compiled: false, finished: false, passed: 0, total: 0, tests: [], allPassed: false };
       }
-      const errors = raw.exitCode === null ? raw.diagnostics.split('\n').filter(Boolean) : [];
+      const errors = raw.exitCode === null ? toPlayerLines(problem, raw.diagnostics).split('\n').filter(Boolean) : [];
       const result = parseResults(raw.stdout, errors);
       result.ms = Math.round(performance.now() - started);
       if (raw.timedOut) result.error = `Timed out after ${this.timeoutMs / 1000}s (infinite loop?)`;

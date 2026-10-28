@@ -17,12 +17,30 @@ export function withExtras(problem, code) {
   return code.replace(/\s+$/, '') + '\n' + header + prefix + extra;
 }
 
+// The player's code is wrapped in `include struct ... end`. The browser toplevel
+// parses its input as toplevel phrases, where `;; run_test "..." test` followed by
+// `let ...` is a syntax error; inside a structure it is fine, as with ocamlc.
+// `include` keeps every definition visible afterwards.
 export function buildProgram(problem, code, { stressN = DEFAULT_STRESS_N } = {}) {
   const prelude = problem.prelude.replace(
     /let stress_n = \d+/,
     `let stress_n = ${Math.max(1, Math.floor(stressN))}`
   );
-  return `${prelude}\n${withExtras(problem, code)}\n;; let () = Assert.summary ()\n`;
+  return `${prelude}\ninclude struct\n${withExtras(problem, code)}\nend\n;; let () = Assert.summary ()\n`;
+}
+
+// Lines before the player's first line in buildProgram's output.
+export function codeLineOffset(problem) {
+  return problem.prelude.split('\n').length + 1;
+}
+
+// Rewrites "Line N" in compiler messages to the player's own line numbers.
+export function toPlayerLines(problem, message) {
+  const offset = codeLineOffset(problem);
+  return message.replace(/\bLines? (\d+)(?:-(\d+))?/g, (all, a, b) => {
+    const shift = (n) => Math.max(1, Number(n) - offset);
+    return b ? `Lines ${shift(a)}-${shift(b)}` : `Line ${shift(a)}`;
+  });
 }
 
 // Reads the PASS/FAIL lines the Assert module prints.

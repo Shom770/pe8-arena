@@ -1,17 +1,27 @@
 import { Room } from './room.js';
 import { Grader } from './grader.js';
 import { SupabaseTransport, LocalTransport } from './transport.js';
+import { Booth } from './camera.js';
+import { sfx, avatar, playKO, spinMatchup } from './fx.js';
+import { ZONES, zoneOf, zoneForRound, pickFromZone } from './zones.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const cfg = window.ARENA_CONFIG || {};
 const params = new URLSearchParams(location.search);
 const useLocal = params.has('local') || !cfg.supabaseUrl || !cfg.supabaseAnonKey;
+const CORNERS = ['Red corner', 'Blue corner'];
 
 let problems = [];
 let room = null;
+let booth = null;
 let lanes = [];
 let lastRaceId = null;
-let lastRendered = { phase: null };
+let lastMatchup = null;
+let spinning = false;
+let selectKey = null;
+let sawRacing = null; // raceId we watched while it was live, so a late joiner doesn't get a KO replay
+let koShown = null;
+let bellRung = null;
 
 // ---------- helpers ----------
 function show(el, on = true) {
@@ -49,6 +59,9 @@ function savedName() {
 function saveName(n) {
   try { localStorage.setItem('arena-name', n); } catch {}
 }
+function pic(id, name) {
+  return avatar(name, room && room.photoOf(id));
+}
 
 // ---------- home ----------
 async function boot() {
@@ -59,6 +72,11 @@ async function boot() {
       : 'Local mode: no Supabase project is configured, so rooms only connect tabs in this browser. See the README to go online.';
     show(banner);
   }
+  const soundBtn = $('#sound');
+  soundBtn.textContent = sfx.on ? 'Bell on' : 'Bell off';
+  soundBtn.onclick = () => (soundBtn.textContent = sfx.toggle() ? 'Bell on' : 'Bell off');
+
+  booth = new Booth($('#booth'), () => homeError(''));
   $('#name').value = params.get('name') || savedName();
   const res = await fetch('problems.json');
   problems = (await res.json()).problems;
@@ -73,7 +91,7 @@ async function boot() {
     enter(c);
   };
   $('#join-code').addEventListener('keydown', (e) => e.key === 'Enter' && $('#join').click());
-  if (code && $('#name').value.trim()) enter(code);
+  if (code && $('#name').value.trim() && booth.photo) enter(code);
 }
 
 function homeError(msg) {
@@ -84,15 +102,17 @@ function homeError(msg) {
 
 async function enter(code) {
   const name = $('#name').value.trim();
-  if (!name) return homeError('Enter your name first.');
+  if (!booth.photo) return homeError('Take your weigh-in photo first (camera or upload).');
+  if (!name) return homeError('Enter your fighter name first.');
   homeError('');
   saveName(name);
+  booth.stop();
   const me = { id: myId(), name, joinedAt: Date.now() };
   const transport = useLocal
     ? new LocalTransport({ room: code, me })
     : new SupabaseTransport({ url: cfg.supabaseUrl, anonKey: cfg.supabaseAnonKey, room: code, me });
   const grader = new Grader({ stressN: cfg.stressN, timeoutMs: (cfg.gradeTimeoutSeconds || 15) * 1000 });
-  room = new Room({ transport, me, problems, grader });
+  room = new Room({ transport, me, problems, grader, photo: booth.photo });
 
   const url = new URL(location.href);
   url.searchParams.set('room', code);
@@ -122,7 +142,8 @@ async function enter(code) {
   };
 
   buildLanes();
-  fillProblemSelect();
+  $('#start').onclick = startRace;
+  $('#random-match').onclick = () => room.hostRandomMatch();
   room.on('change', render);
   room.on('race', onNewRace);
   room.on('code', onRemoteCode);
@@ -160,22 +181,47 @@ function buildLanes() {
   });
 }
 
-function fillProblemSelect() {
+// The host's problem picker: "next up" climbs the zone ladder, or pick a zone or a problem.
+function fillProblemSelect(s) {
+  const played = s.played || [];
+  const key = `${s.round}|${played.join(',')}`;
+  if (key === selectKey) return;
+  selectKey = key;
   const sel = $('#problem-select');
+  const keep = sel.value && sel.value !== 'next' ? sel.value : 'next';
+  const next = zoneForRound(s.round || 0);
   sel.innerHTML =
-    `<option value="random">Random problem</option>` +
-    problems.map((p) => `<option value="${p.id}">Q${p.id}. ${esc(p.title)}</option>`).join('');
-  $('#start').onclick = () => {
-    let id = sel.value === 'random' ? problems[Math.floor(Math.random() * problems.length)].id : Number(sel.value);
-    room.hostStart(id);
-  };
+    `<option value="next">Next up · Zone ${next.n}: ${esc(next.name)} (random)</option>` +
+    ZONES.map((z) => {
+      const opts = z.ids
+        .map((id) => problems.find((p) => p.id === id))
+        .filter(Boolean)
+        .map((p) => `<option value="${p.id}">${played.includes(p.id) ? '✓ ' : ''}Q${p.id}. ${esc(p.title)}</option>`)
+        .join('');
+      return `<optgroup label="Zone ${z.n} · ${esc(z.name)} · ${esc(z.blurb)}"><option value="zone:${z.n}">Random from Zone ${z.n}</option>${opts}</optgroup>`;
+    }).join('');
+  sel.value = keep;
+  if (sel.value !== keep) sel.value = 'next';
+}
+
+function startRace() {
+  const s = room.state;
+  const v = $('#problem-select').value;
+  let id;
+  if (v === 'next') id = pickFromZone(zoneForRound(s.round || 0), s.played);
+  else if (v.startsWith('zone:')) id = pickFromZone(ZONES[Number(v.slice(5)) - 1], s.played);
+  else id = Number(v);
+  $('#problem-select').value = 'next';
+  room.hostStart(id);
 }
 
 function onNewRace() {
   const p = room.problem;
   if (!p) return;
   lastRaceId = room.state.raceId;
-  $('#problem-title').textContent = `Q${p.id}. ${p.title}  ·  ${p.filename}`;
+  const z = zoneOf(p.id);
+  $('#problem-title').textContent = `Q${p.id}. ${p.title} · ${p.filename}`;
+  $('.problem-panel summary .label').textContent = `Zone ${z.n} · ${z.name}`;
   $('#problem-text').textContent = p.prompt;
   $('#problem-panel').open = true;
   lanes.forEach(({ cm }, i) => {
@@ -209,79 +255,129 @@ function render() {
   const inRace = s.phase === 'countdown' || s.phase === 'racing' || (s.phase === 'finished' && s.raceId);
 
   if (s.raceId && s.raceId !== lastRaceId && room.problem) onNewRace();
+  if (s.phase === 'racing' || s.phase === 'countdown') sawRacing = s.raceId;
 
-  $('#member-count').textContent = `${room.members.length} here`;
+  $('#member-count').textContent = `${room.members.length} in the building`;
   show($('#lobby'), !inRace || s.phase === 'lobby');
   show($('#race'), inRace && s.phase !== 'lobby');
   show($('#clock'), s.phase === 'racing' || s.phase === 'finished');
 
   renderLobby(s, mySlot);
   if (inRace && s.phase !== 'lobby') renderRace(s, mySlot);
-  lastRendered.phase = s.phase;
+  maybeKnockout(s);
 }
 
 function renderLobby(s, mySlot) {
+  const matchup = s.matchup || 0;
+  if (lastMatchup !== null && matchup === lastMatchup + 1 && !spinning) {
+    lastMatchup = matchup;
+    runSpin(s);
+  }
+  lastMatchup = matchup;
+
+  if (!spinning) {
+    [0, 1].forEach((i) => {
+      const slotEl = $(`.slot[data-slot="${i}"]`);
+      const id = s.slots[i];
+      const name = s.names[i] || room.nameOf(id) || 'Fighter';
+      $('.slot-name', slotEl).innerHTML = id
+        ? `${esc(name)}${id === room.me.id ? '<span class="you">you</span>' : ''}`
+        : '<span class="muted">Open</span>';
+      if (id) $('.slot-photo', slotEl).src = pic(id, name);
+      slotEl.classList.toggle('filled', !!id);
+    });
+  }
   [0, 1].forEach((i) => {
     const slotEl = $(`.slot[data-slot="${i}"]`);
     const id = s.slots[i];
-    $('.slot-name', slotEl).innerHTML = id
-      ? `${esc(s.names[i] || room.nameOf(id) || 'Player')}${id === room.me.id ? ' <span class="you">you</span>' : ''}`
-      : '<span class="muted">Open</span>';
-    slotEl.classList.toggle('filled', !!id);
-    const actions = $('.slot-actions', slotEl);
     let html = '';
-    if (!id) html = `<button class="btn" data-claim="${i}">${mySlot >= 0 ? 'Switch here' : 'Play'}</button>`;
-    else if (id === room.me.id) html = `<button class="btn ghost" data-release>Spectate instead</button>`;
+    if (!id) html = `<button class="btn" data-claim="${i}">${mySlot >= 0 ? 'Switch corners' : 'Take this corner'}</button>`;
+    else if (id === room.me.id) html = `<button class="btn ghost small" data-release>Back to ringside</button>`;
     else if (room.isHost) html = `<button class="btn ghost small" data-kick="${i}">Remove</button>`;
-    actions.innerHTML = html;
+    $('.slot-actions', slotEl).innerHTML = html;
   });
   $('#room').querySelectorAll('[data-claim]').forEach((b) => (b.onclick = () => room.claim(Number(b.dataset.claim))));
   $('#room').querySelectorAll('[data-release]').forEach((b) => (b.onclick = () => room.release()));
   $('#room').querySelectorAll('[data-kick]').forEach((b) => (b.onclick = () => room.hostClearSlot(Number(b.dataset.kick))));
 
   show($('#host-controls'), room.isHost);
+  if (room.isHost) fillProblemSelect(s);
   const ready = s.slots[0] && s.slots[1];
-  $('#start').disabled = !ready;
-  $('#start-hint').textContent = ready ? 'Both players are in. Start when ready.' : 'Waiting for two players to take a slot.';
+  $('#start').disabled = !ready || spinning;
+  $('#random-match').disabled = room.members.length < 2 || spinning;
+  const next = zoneForRound(s.round || 0);
+  $('#start-hint').textContent = ready
+    ? `Round ${(s.round || 0) + 1} is a Zone ${next.n} bout (${next.blurb.toLowerCase()}). Bouts climb a zone each round.`
+    : room.members.length < 2
+      ? 'Waiting for someone to fight. Send the invite link.'
+      : 'Need two fighters. Hit Random matchup, or let people take a corner.';
   $('#lobby-note').textContent = room.isHost
-    ? 'You are the host. Share the invite link, then pick a problem.'
-    : `${esc(room.nameOf(room.hostId) || 'The host')} picks the problem and starts the race.`;
+    ? ''
+    : `${room.nameOf(room.hostId) || 'The host'} is promoting tonight: they set the matchup and ring the bell.`;
+  show($('#lobby-note'), !room.isHost);
 
   $('#member-list').innerHTML = [...room.members]
     .sort((a, b) => a.joinedAt - b.joinedAt)
     .map((m) => {
       const slot = s.slots.indexOf(m.id);
-      const role = slot >= 0 ? `Player ${slot + 1}` : 'Spectator';
-      return `<li>${esc(m.name)}${m.id === room.hostId ? ' <span class="pill">host</span>' : ''}${m.id === room.me.id ? ' <span class="you">you</span>' : ''} <span class="muted">· ${role}</span></li>`;
+      const role = slot >= 0 ? CORNERS[slot] : 'Ringside';
+      return `<li class="${slot >= 0 ? 'p' + slot : ''}"><img src="${esc(pic(m.id, m.name))}" alt="">${esc(m.name)}${m.id === room.hostId ? ' <span class="pill host">host</span>' : ''}${m.id === room.me.id ? '<span class="you">you</span>' : ''} <span class="muted">· ${role}</span></li>`;
     })
     .join('');
+}
+
+async function runSpin(s) {
+  spinning = true;
+  const slotEls = [0, 1].map((i) => $(`.slot[data-slot="${i}"]`));
+  slotEls.forEach((el) => el.classList.add('spinning'));
+  const members = room.members.map((m) => ({ name: m.name, photo: room.photoOf(m.id) }));
+  await spinMatchup(
+    slotEls.map((el, i) => ({ el, finalName: s.names[i] || 'Fighter', finalPhoto: room.photoOf(s.slots[i]) })),
+    members
+  );
+  slotEls.forEach((el) => el.classList.remove('spinning'));
+  spinning = false;
+  render();
 }
 
 function renderRace(s, mySlot) {
   const iAmPlayer = mySlot >= 0;
   const locked = s.phase !== 'racing' || Date.now() < room.localStart;
+  const z = room.problem ? zoneOf(room.problem.id) : ZONES[0];
+  $('#round-label').textContent = `Round ${s.round || 1} · Zone ${z.n}`;
 
   [0, 1].forEach((i) => {
     const { el, cm } = lanes[i];
     const mine = i === mySlot;
     const hideCode = iAmPlayer && !mine && s.phase !== 'finished';
+    const name = s.names[i] || 'Left the ring';
+    const photo = pic(s.slots[i], name);
+    const won = !!(s.winner && s.winner.slot === i);
     el.classList.toggle('mine', mine);
-    el.classList.toggle('winner', !!(s.winner && s.winner.slot === i));
-    $('.lane-tag', el).textContent = `Player ${i + 1}${mine ? ' · you' : ''}`;
-    $('.lane-name', el).textContent = s.names[i] || 'Left the room';
+    el.classList.toggle('winner', won);
+    el.classList.toggle('loser', !!(s.winner && !won));
+    $('.lane-tag', el).textContent = `${CORNERS[i]}${mine ? ' · you' : ''}`;
+    $('.lane-name', el).textContent = name;
+    $('.lane-photo', el).src = photo;
 
     const r = s.results[i];
     const grading = s.grading[i] != null;
     let status = '<span class="pill">coding</span>';
-    if (s.winner && s.winner.slot === i) status = '<span class="pill win">winner</span>';
+    if (won) status = '<span class="pill win">winner</span>';
     else if (grading) status = '<span class="pill busy">running tests…</span>';
     else if (r && !r.compiled) status = '<span class="pill bad">compile error</span>';
     else if (r) status = `<span class="pill ${r.allPassed ? 'win' : ''}">${r.passed}/${r.total} passing</span>`;
     else if (Date.now() - room.codeSeenAt[i] < 1500 && !mine) status = '<span class="pill">typing…</span>';
     $('.lane-status', el).innerHTML = status;
 
+    // The HUD: health-bar style progress through the tests.
+    const hud = $(`.hud-side[data-hud="${i}"]`);
     const pct = r && r.total ? Math.round((100 * r.passed) / r.total) : 0;
-    $('.progress-fill', el).style.width = `${pct}%`;
+    $('.hud-photo', hud).src = photo;
+    $('.hud-name', hud).textContent = name;
+    $('.hud-fill', hud).style.width = `${pct}%`;
+    $('.hud-score', hud).textContent = r ? (r.compiled ? `${r.passed}/${r.total}` : 'ERR') : '–';
+    hud.classList.toggle('full', !!(r && r.allPassed));
 
     show($('.editor', el), !hideCode);
     show($('.hidden-code', el), hideCode);
@@ -307,24 +403,74 @@ function renderRace(s, mySlot) {
   if (s.phase === 'finished' && s.winner) {
     const w = s.winner;
     const you = w.id === room.me.id;
-    const time = w.elapsedMs != null ? ` in ${fmtTime(w.elapsedMs)}` : '';
-    banner.innerHTML = `<div><strong>${esc(w.name || 'Player ' + (w.slot + 1))}</strong> ${w.forfeit ? 'wins: their opponent left' : `wins${time}`}${you ? ' · nice work!' : ''}</div>` +
-      (room.isHost ? '<button id="rematch" class="btn primary">Back to lobby</button>' : '<span class="muted">Waiting for the host…</span>');
+    const how = w.forfeit ? 'by forfeit: their opponent left the ring' : `in ${fmtTime(w.elapsedMs)}`;
+    banner.innerHTML =
+      `<div><div class="belt"><em>${esc(w.name || CORNERS[w.slot])}</em> takes the belt${you ? ' · that’s you' : ''}</div><div class="muted">${how}</div></div>` +
+      `<div class="actions">${w.forfeit ? '' : '<button id="replay-ko" class="btn ghost small">Replay KO</button>'}` +
+      (room.isHost
+        ? '<button id="rematch" class="btn">Back to lobby</button><button id="next-match" class="btn gold">Random matchup</button>'
+        : '<span class="muted">Waiting for the host…</span>') +
+      '</div>';
     show(banner);
     const b = $('#rematch');
     if (b) b.onclick = () => room.hostBackToLobby();
+    const n = $('#next-match');
+    if (n) n.onclick = () => room.hostRandomMatch();
+    const k = $('#replay-ko');
+    if (k) k.onclick = () => knockout(s);
   } else {
     show(banner, false);
   }
 }
 
+// ---------- knockout ----------
+function maybeKnockout(s) {
+  if (s.phase !== 'finished' || !s.winner || s.winner.forfeit) return;
+  if (sawRacing !== s.raceId || koShown === s.raceId) return;
+  koShown = s.raceId;
+  knockout(s);
+}
+
+function knockout(s) {
+  const w = s.winner;
+  const loserSlot = 1 - w.slot;
+  const loserId = s.slots[loserSlot];
+  const winnerName = w.name || CORNERS[w.slot];
+  const loserName = s.names[loserSlot] || CORNERS[loserSlot];
+  const role = room.me.id === w.id ? 'winner' : room.me.id === loserId ? 'loser' : null;
+  const time = fmtTime(w.elapsedMs);
+  const sub =
+    role === 'loser' ? `${winnerName} passed every test in ${time}. Shake it off and run it back.`
+    : role === 'winner' ? `Every test passed in ${time}. ${loserName} is down for the count.`
+    : `${winnerName} passed every test in ${time}. ${loserName} is down for the count.`;
+  playKO({
+    winner: { name: winnerName, photo: room.photoOf(w.id) },
+    loser: { name: loserName, photo: room.photoOf(loserId) },
+    sub,
+    role,
+  });
+}
+
+// ---------- clock ----------
 function tick() {
   if (!room) return;
   const s = room.state;
   const cd = $('#countdown');
-  if (s.phase === 'countdown' || (s.phase === 'racing' && Date.now() < room.localStart)) {
+  // "Fight!" stays up for a moment after the start, the same for both players.
+  if (s.phase === 'countdown' || (s.phase === 'racing' && Date.now() < room.localStart + 700)) {
     const left = Math.max(0, room.localStart - Date.now());
-    cd.textContent = left > 0 ? Math.ceil(left / 1000) : 'Go!';
+    const z = room.problem ? zoneOf(room.problem.id) : ZONES[0];
+    $('.cd-round', cd).textContent = `Round ${s.round || 1} · Zone ${z.n}: ${z.name}`;
+    const num = $('.cd-num', cd);
+    const text = left > 0 ? String(Math.ceil(left / 1000)) : 'Fight!';
+    if (num.textContent !== text) {
+      num.textContent = text;
+      num.classList.toggle('go', left <= 0);
+      if (left <= 0 && bellRung !== s.raceId) {
+        bellRung = s.raceId;
+        sfx.bell(1);
+      }
+    }
     show(cd);
   } else if (!cd.classList.contains('hidden')) {
     show(cd, false);
